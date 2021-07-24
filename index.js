@@ -44,39 +44,41 @@ HtmlWebpackInlineSourcePlugin.prototype.processTags = function (compilation, reg
   return result;
 };
 
-HtmlWebpackInlineSourcePlugin.prototype.resolveSourceMaps = function (compilation, assetName, asset) {
-  let source = asset.source();
+HtmlWebpackInlineSourcePlugin.prototype.resolveSourceMaps = function (compilation, assetInfo) {
   const out = compilation.outputOptions;
-  // Get asset file absolute path
-  const assetPath = path.join(out.path, assetName);
+
   // Extract original sourcemap URL from source string
+  let source = assetInfo.asset.source();
   if (typeof source !== 'string') source = source.toString();
 
-  const mapUrlOriginal = sourceMapUrl.getFrom(source);
   // Return unmodified source if map is unspecified, URL-encoded, or already relative to site root
+  const mapUrlOriginal = sourceMapUrl.getFrom(source);
   if (!mapUrlOriginal || mapUrlOriginal.indexOf('data:') === 0 || mapUrlOriginal.indexOf('/') === 0) {
     return source;
   }
+
   // Figure out sourcemap file path *relative to the asset file path*
-  const assetDir = path.dirname(assetPath);
-  const mapPath = path.join(assetDir, mapUrlOriginal);
-  const mapPathRelative = path.relative(out.path, mapPath);
-  // Starting with Node 6, `path` module throws on `undefined`
-  let publicPath = out.publicPath || '';
-  if (publicPath === 'auto') publicPath = '';
+  const rootPath = slash(out.path);
+  const assetPath = path.posix.join(rootPath, assetInfo.assetName);
+  const assetDir = path.posix.dirname(assetPath);
+  const mapPath = path.posix.join(assetDir, mapUrlOriginal);
+  const mapPathRelative = path.posix.relative(rootPath, mapPath);
 
   // Prepend Webpack public URL path to source map relative path
   // Calling `slash` converts Windows backslashes to forward slashes
-  const mapUrlCorrected = slash(path.join(publicPath, mapPathRelative));
+  const publicPath = out.publicPath === 'auto' ? '' : slash(out.publicPath) || '';
+  const mapUrlCorrected = publicPath ? path.posix.join(publicPath, mapPathRelative) : mapPathRelative;
+
   // Regex: exact original sourcemap URL, possibly '*/' (for CSS), then EOF, ignoring whitespace
-  const regex = new RegExp(escapeRegex(mapUrlOriginal) + '(\\s*(?:\\*/)?\\s*$)');
   // Replace sourcemap URL and (if necessary) preserve closing '*/' and whitespace
+  const regex = new RegExp(escapeRegex(mapUrlOriginal) + '(\\s*(?:\\*/)?\\s*$)');
   return source.replace(regex, function (match, group) {
     return mapUrlCorrected + group;
   });
 };
 
 HtmlWebpackInlineSourcePlugin.prototype.processTag = function (compilation, regex, tag, filename) {
+  const out = compilation.outputOptions;
   let assetUrl;
 
   // inline js
@@ -86,20 +88,17 @@ HtmlWebpackInlineSourcePlugin.prototype.processTag = function (compilation, rege
   // not inline
   else return tag;
 
-  // Strip public URL prefix from asset URL to get Webpack asset name
-  let publicPath = compilation.outputOptions.publicPath || '';
-  if (publicPath === 'auto') publicPath = '';
-  else if (publicPath && !publicPath.endsWith('/')) publicPath += '/';
-
   // if filename is in subfolder, assetUrl should be prepended folder path
-  if (path.basename(filename) !== filename) assetUrl = path.dirname(filename) + '/' + assetUrl;
+  const basename = path.basename(filename);
+  if (basename !== filename) assetUrl = path.posix.join(slash(basename), assetUrl);
 
+  // Strip public URL prefix from asset URL to get Webpack asset name
+  const publicPath = out.publicPath === 'auto' ? '' : slash(out.publicPath) || '';
   const assetName = path.posix.relative(publicPath, assetUrl);
-  let asset = compilation.assets[assetName];
-  if (!asset) asset = getAssetByName(compilation.assets, assetName, publicPath);
-  if (!asset) return tag; // TODO: handle not found
-  const updatedSource = this.resolveSourceMaps(compilation, assetName, asset);
+  const assetInfo = getAssetByName(compilation.assets, assetName, publicPath);
+  if (!assetInfo) return tag; // cannot inline
 
+  const updatedSource = this.resolveSourceMaps(compilation, assetInfo);
   return {
     tagName: tag.tagName === 'script' ? 'script' : 'style',
     closeTag: true,
@@ -109,11 +108,14 @@ HtmlWebpackInlineSourcePlugin.prototype.processTag = function (compilation, rege
   };
 };
 
-function getAssetByName (assests, assetName, publicPath) {
-  for (const key in assests) {
-    if (Object.prototype.hasOwnProperty.call(assests, key)) {
+function getAssetByName (assets, assetName, publicPath) {
+  const asset = assets[assetName];
+  if (asset) return { asset, assetName };
+
+  for (const key in assets) {
+    if (Object.prototype.hasOwnProperty.call(assets, key)) {
       const processedKey = path.posix.relative(publicPath, key);
-      if (processedKey === assetName) return assests[key];
+      if (processedKey === assetName) return { asset, assetName: key };
     }
   }
 }
