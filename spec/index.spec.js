@@ -12,7 +12,7 @@ const OUTPUT_DIR = path.join(__dirname, '../dist');
 
 describe('HtmlWebpackInlineSourcePlugin', function () {
   beforeEach(function (done) {
-    rimraf(OUTPUT_DIR, done);
+    rimraf(OUTPUT_DIR, function () { done(); });
   });
 
   it('should not inline source by default', function (done) {
